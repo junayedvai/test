@@ -44,8 +44,11 @@ OFF  = int(os.environ.get("OFF", "0x38"), 16)   # saved_rip - OFF   (0x38 = fix)
 def start():
     if args.REMOTE:
         return remote(HOST, PORT)
-    # local test harness against a faithful glibc 2.35 loader
-    return process(["./ld-2.35.so", "--library-path", ".", "./deadlink"])
+    # local run: prefer a faithful glibc-2.35 loader if present, else run the
+    # binary directly with the local libc on LD_LIBRARY_PATH.
+    if os.path.exists("./ld-2.35.so"):
+        return process(["./ld-2.35.so", "--library-path", ".", "./deadlink"])
+    return process("./deadlink", env={"LD_LIBRARY_PATH": "."})
 
 io = None
 menu_map = {}
